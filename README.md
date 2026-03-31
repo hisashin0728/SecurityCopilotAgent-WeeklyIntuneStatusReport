@@ -2,6 +2,12 @@
 
 > Microsoft Intune と Microsoft Defender for Endpoint のデータを週次で収集・分析し、デバイス管理状況をまとめた HTML メールレポートを自動送信する Security Copilot Agent ソリューション。
 
+## レポート生成例
+> 以下はサンプルレポートです
+<img width="800" height="1066" alt="image" src="https://github.com/user-attachments/assets/3637e63e-c932-4ef2-bf5e-6406b0fad91d" />
+<img width="800" height="997" alt="image" src="https://github.com/user-attachments/assets/b6956d49-77d5-40d9-b2ff-42d607cde343" />
+<img width="800" height="1086" alt="image" src="https://github.com/user-attachments/assets/a576678f-7a65-42fe-a4e5-8a878367ec62" />
+
 ## 概要
 
 `WeeklyIntuneStatusReport` は、Microsoft Security Copilot の Standard Agent として動作し、以下を自動化します。
