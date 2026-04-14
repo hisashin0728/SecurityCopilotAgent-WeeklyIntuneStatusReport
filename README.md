@@ -2,12 +2,6 @@
 
 > Microsoft Intune と Microsoft Defender for Endpoint のデータを週次で収集・分析し、デバイス管理状況をまとめた HTML メールレポートを自動送信する Security Copilot Agent ソリューション。
 
-## レポート生成例
-> 以下はサンプルレポートです
-<img width="800" height="1066" alt="image" src="https://github.com/user-attachments/assets/3637e63e-c932-4ef2-bf5e-6406b0fad91d" />
-<img width="800" height="997" alt="image" src="https://github.com/user-attachments/assets/b6956d49-77d5-40d9-b2ff-42d607cde343" />
-<img width="800" height="1086" alt="image" src="https://github.com/user-attachments/assets/a576678f-7a65-42fe-a4e5-8a878367ec62" />
-
 ## 概要
 
 `WeeklyIntuneStatusReport` は、Microsoft Security Copilot の Standard Agent として動作し、以下を自動化します。
@@ -53,20 +47,21 @@
                      - Office 365 メール送信
 ```
 
-## レポート内容（10 セクション）
+## レポート内容（11 セクション）
 
 | # | セクション | 内容 | データソース |
 |---|---|---|---|
-| 1 | **サマリーカード** | 総デバイス数・準拠率・エラー数・パッチ遅延数（先週比） | Intune |
-| 2 | **全体傾向分析・推奨対策** | デバイス管理全体の傾向要約、要注意ポイント（非準拠/パッチ遅延/MDAV-MDE 乖離/ポリシーエラー/アプリ失敗）、優先度付き推奨対策テーブル | 全データ統合 |
+| 1 | **サマリーカード** | 総デバイス数・準拠率・エラー数・パッチ遅延数・重複デバイス数・インストール失敗アプリ数・プライマリユーザーなしデバイス数（先週比） | Intune |
+| 2 | **全体傾向分析・推奨対策** | デバイス管理全体の傾向要約、要注意ポイント（非準拠/パッチ遅延/MDAV-MDE 乖離/ポリシーエラー/アプリ失敗/重複デバイス/プライマリユーザー不在）、優先度付き推奨対策テーブル | 全データ統合 |
 | 3 | **OS 別アセット一覧** | Windows / iOS / Android / macOS 別デバイス数と比率 | Intune |
 | 4 | **デバイス登録状況** | 今週の新規登録デバイスと先週比較 | Intune |
-| 5 | **エラー・非準拠デバイス** | コンプライアンス状態別サマリーと非準拠デバイス一覧 | Intune |
-| 6 | **アプリサマリー** | 管理アプリの状態別件数（インストール済み/失敗/保留） | Intune |
+| 5 | **エラー・非準拠デバイス** | コンプライアンス状態別サマリーと非準拠デバイス一覧、**5-1: プライマリユーザー不在デバイス**（userPrincipalName 空・直近14日以内にチェックイン済みのデバイス一覧） | Intune |
+| 6 | **アプリサマリー** | 管理アプリの状態別件数（インストール済み/失敗/保留）、**6-1: インストール失敗が多いアプリ Top 5**（失敗率付きテーブル） | Intune |
 | 7 | **ポリシー状況** | 構成プロファイル・コンプライアンスポリシーの適用状況 | Intune |
 | 8 | **コンプライアンス状態** | 全デバイスの準拠状態分布（色分けテーブル） | Intune |
 | 9 | **パッチ遅延デバイス** | 未修正 OS CVE が 10 件以上のデバイス一覧 | Defender TVM |
-| 10 | **Defender バージョン** | MDAV / MDE ソフトウェアバージョン分布 | Defender TVM |
+| 10 | **重複デバイスオブジェクト** | 同一デバイス名で複数の Intune オブジェクトが存在するグループ一覧（削除候補強調） | Intune |
+| 11 | **Defender バージョン** | MDAV / MDE ソフトウェアバージョン分布 | Defender TVM |
 
 ## ファイル構成
 
@@ -77,6 +72,9 @@ WeeklyIntuneStatusReport/
 ├── WeeklyIntuneStatusReport_LogicApp_ARM.json # Logic App ARM テンプレート
 └── README.md                                   # このファイル
 ```
+
+> **セクション 10「重複デバイスオブジェクト」および「プライマリユーザー不在デバイス (セクション 5-1)」は
+> GetIntuneDevices の取得結果からエージェントが集計するため、追加スキルは不要です。**
 
 ## スキル構成
 
@@ -209,7 +207,10 @@ Instructions 内の `All report text must be written in Japanese.` を変更
 |---|---|
 | スキルは逐次呼び出し | 並列呼び出しで tool_call チェーン破損を防止 |
 | 各テーブル最大 10 行 | HTML 30KB 制限を遵守 |
+| HTML 全体 30KB 以下 | モデル出力トークン枠の制約 |
 | 失敗時はスキップ | エラーで全体が止まらないようにする |
+| 重複デバイス検出はクライアント側で算出 | GetIntuneDevices の結果から deviceName 重複をエージェントが集計 |
+| プライマリユーザー不在はクライアント側で算出 | userPrincipalName 空 かつ lastSyncDateTime 直近14日以内をエージェントが集計 |
 
 ## 関連ソリューション
 
