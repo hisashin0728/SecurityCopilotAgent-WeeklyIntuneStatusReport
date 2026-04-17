@@ -23,6 +23,14 @@
 | **レポート言語** | 日本語 |
 | **メール送信** | Azure Logic App (Office 365 コネクタ) |
 
+## 通知 E メールサンプル
+
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/4a65023f-ef69-4b61-898e-bd7a18a74c24" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/b8cf4a17-deee-403a-8ca4-3d26ab2e1481" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/19428d80-1e4b-4dff-9283-5b3adc650af5" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/f354cee4-6764-48f7-b1aa-17f3ee04caf8" />
+
+
 ## アーキテクチャ
 
 ```
