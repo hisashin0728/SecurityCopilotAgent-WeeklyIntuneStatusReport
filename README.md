@@ -18,18 +18,11 @@
 | 項目 | 値 |
 |---|---|
 | **プラグイン名** | `WeeklyIntuneStatusReport` |
+| **バージョン** | v1.1.0 |
 | **形式** | Agent (gpt-4.1) + KQL (Defender TVM) + LogicApp |
 | **実行周期** | 毎週（604,800 秒 = 7日間） |
 | **レポート言語** | 日本語 |
 | **メール送信** | Azure Logic App (Office 365 コネクタ) |
-
-## 通知 E メールサンプル
-
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/4a65023f-ef69-4b61-898e-bd7a18a74c24" />
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/b8cf4a17-deee-403a-8ca4-3d26ab2e1481" />
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/19428d80-1e4b-4dff-9283-5b3adc650af5" />
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/f354cee4-6764-48f7-b1aa-17f3ee04caf8" />
-
 
 ## アーキテクチャ
 
@@ -228,6 +221,13 @@ Instructions 内の `All report text must be written in Japanese.` を変更
 | [WeeklyThreatIntelReport](../WeeklyThreatIntelReport/) | MDTI 脅威インテリジェンスの週次レポート |
 | [WeeklyEntraIdRiskUserAnalyticsReport](../WeeklyEntraIdRiskUserAnalyticsReport/) | Entra ID リスクユーザーの週次レポート |
 | [CVEImpactInvestigator](../CVEImpactInvestigator/) | CVE 影響調査エージェント |
+
+## 版歴（Change Log）
+
+| バージョン | 日付 | 変更内容 |
+|---|---|---|
+| **v1.0.0** | 2026-06-10 | 初版リリース（Intune 組み込みスキル + Defender TVM KQL + Logic App メール送信。11 セクション HTML レポート） |
+| **v1.1.0** | 2026-06-17 | `GetIntuneDevices` が単一デバイス詳細を返す不具合に対応。Phase 1 で User / Device パラメータを設定しないことを明示し、存在しない `Request` 入力を廃止。全件取得のため Platform 別（Windows / iOS / Android / macOS）の分割呼び出しに変更 |
 
 ## ライセンス
 

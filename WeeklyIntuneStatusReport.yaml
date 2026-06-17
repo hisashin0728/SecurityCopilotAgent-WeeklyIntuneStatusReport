@@ -90,9 +90,20 @@ SkillGroups:
 
             ## Phase 1: Intune デバイスインベントリ収集
             1. **GetIntuneDevices** を呼び出し、すべての管理対象デバイスの一覧を取得する。
-               Request パラメータ:
-               "Get all managed devices including device name, OS platform, OS version,
-               compliance state, enrollment date, last check-in time, and device model."
+
+               **パラメータの渡し方（最重要・必須）**:
+               - GetIntuneDevices は「**User も Device も指定しない場合に限り、全デバイスの一覧**を返す」スキルである。
+                 Device パラメータ（デバイス名／デバイス ID）を渡すと、**そのデバイス1台の詳細のみ**を返し、
+                 週次レポートに必要な全デバイス集計ができなくなる。
+               - したがって **User パラメータと Device パラメータは絶対に設定しない（空のままにする）**。
+                 特定のデバイス名・デバイス ID・ユーザー名・UPN を推測して渡してはならない。
+               - このスキルに "Request" という入力は存在しない。自由文ではなく、下記の正式パラメータのみを使用する
+                 （User / Device / Platform / StartEnrollmentDate / EndEnrollmentDate /
+                 StartLastCheckinDate / EndLastCheckinDate / ComplianceState）。
+               - 全件を確実に取得するため、**Platform パラメータに "Windows" / "iOS" / "Android" / "macOS" を
+                 順に指定して 4 回に分けて呼び出す**（いずれの呼び出しでも Device / User は空のままにする）。
+                 各回の結果を結合して全デバイス一覧として扱う。スキル呼び出しは必ず1回ずつ順番に行うこと。
+
                取得したデータから以下を算出する:
                - 今週（直近7日以内に enrollmentDateTime がある）登録されたデバイス数
                - 先週（8〜14日前に enrollmentDateTime がある）登録されたデバイス数
