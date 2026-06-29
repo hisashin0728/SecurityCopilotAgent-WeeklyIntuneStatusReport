@@ -6,20 +6,21 @@
 
 `WeeklyIntuneStatusReport` は、Microsoft Security Copilot の Standard Agent として動作し、以下を自動化します。
 
-- Intune 管理対象デバイスのインベントリ収集（OS 別・コンプライアンス状態別）
-- デバイス登録数の先週比トレンド分析
-- コンプライアンスポリシー・構成プロファイルの適用状況把握
-- 管理対象アプリのインストール成功/失敗状況
+- Defender Advanced Hunting (DeviceInfo) を KQL で集計したデバイスインベントリ（OS 別・総数）
+- デバイス登録数の先週比トレンド分析（DeviceInfo 初観測日近似）
+- 重複デバイス検出（同一デバイス名で複数 DeviceId）
 - Defender TVM による未修正 CVE ベースのパッチ遅延デバイス特定
 - MDAV（Windows Defender）/ MDE（Defender for Endpoint）のバージョン分布分析
 - 全データを統合した傾向分析・推奨対策の生成
 - メール互換（全インラインスタイル）の HTML レポートを Logic App 経由で送信
 
+> **大規模対応**: デバイス情報は全件取得せず KQL 側で集計するため、1万台規模でもトークン超過なく安定動作します。コンプライアンスは GetIntuneDevices を「非準拠のみ」で 1 回だけ呼び出して近似準拠率を補完します。
+
 | 項目 | 値 |
 |---|---|
 | **プラグイン名** | `WeeklyIntuneStatusReport` |
-| **バージョン** | v1.1.0 |
-| **形式** | Agent (gpt-4.1) + KQL (Defender TVM) + LogicApp |
+| **バージョン** | v1.5.0 |
+| **形式** | Agent (gpt-4.1) + KQL (Defender DeviceInfo/TVM) + Intune + LogicApp |
 | **実行周期** | 毎週（604,800 秒 = 7日間） |
 | **レポート言語** | 日本語 |
 | **メール送信** | Azure Logic App (Office 365 コネクタ) |
@@ -34,34 +35,30 @@
 └──────────────┬───────────────┘
                │  (逐次呼び出し)
                │
-               ├──▶ Intune プラグイン (組み込み)
-               │     - GetIntuneDevices
-               │     - GetCompliancePolicies
-               │     - GetConfigurationProfiles
-               │     - GetManagedApps
-               │
                ├──▶ Defender KQL (Advanced Hunting)
+               │     - DeviceInfo                       → 総数/OS内訳/重複/登録トレンド
                │     - DeviceTvmSoftwareVulnerabilities → パッチ遅延
                │     - DeviceTvmSoftwareInventory      → MDAV/MDE バージョン
+               │
+               ├──▶ Intune プラグイン (組み込み)
+               │     - GetIntuneDevices (非準拠のみ少量取得→近似準拠率)
                │
                └──▶ Azure Logic App
                      - Office 365 メール送信
 ```
 
-## レポート内容（11 セクション）
+## レポート内容（9 セクション）
 
 | # | セクション | 内容 | データソース |
 |---|---|---|---|
-| 1 | **サマリーカード** | 総デバイス数・準拠率・エラー数・パッチ遅延数・重複デバイス数・インストール失敗アプリ数・プライマリユーザーなしデバイス数（先週比） | Intune |
-| 2 | **全体傾向分析・推奨対策** | デバイス管理全体の傾向要約、要注意ポイント（非準拠/パッチ遅延/MDAV-MDE 乖離/ポリシーエラー/アプリ失敗/重複デバイス/プライマリユーザー不在）、優先度付き推奨対策テーブル | 全データ統合 |
-| 3 | **OS 別アセット一覧** | Windows / iOS / Android / macOS 別デバイス数と比率 | Intune |
-| 4 | **デバイス登録状況** | 今週の新規登録デバイスと先週比較 | Intune |
-| 5 | **エラー・非準拠デバイス** | コンプライアンス状態別サマリーと非準拠デバイス一覧、**5-1: プライマリユーザー不在デバイス**（userPrincipalName 空・直近14日以内にチェックイン済みのデバイス一覧） | Intune |
-| 6 | **アプリサマリー** | 管理アプリの状態別件数（インストール済み/失敗/保留）、**6-1: インストール失敗が多いアプリ Top 5**（失敗率付きテーブル） | Intune |
-| 7 | **ポリシー状況** | 構成プロファイル・コンプライアンスポリシーの適用状況 | Intune |
-| 8 | **コンプライアンス状態** | 全デバイスの準拠状態分布（色分けテーブル） | Intune |
+| 1 | **サマリーカード** | 総デバイス数・今週新規数（先週比）・重複デバイス数・パッチ遅延数 | DeviceInfo / TVM |
+| 2 | **全体傾向分析・推奨対策** | デバイス管理全体の傾向要約、要注意ポイント（パッチ遅延/MDAV-MDE 乖離/重複デバイス）、優先度付き推奨対策テーブル | 全データ統合 |
+| 3 | **OS 別アセット一覧** | OS / OS バージョン別デバイス数と比率 | DeviceInfo |
+| 4 | **デバイス登録状況** | 今週/先週/それ以前の新規デバイス数（初観測日近似） | DeviceInfo |
+| 5 | **エラー・非準拠デバイス** | 非準拠デバイス一覧 | Intune（Noncompliant） |
+| 8 | **コンプライアンス状態** | 近似準拠率（(総数−非準拠)/総数）と Compliant/NonCompliant 分布 | DeviceInfo + Intune |
 | 9 | **パッチ遅延デバイス** | 未修正 OS CVE が 10 件以上のデバイス一覧 | Defender TVM |
-| 10 | **重複デバイスオブジェクト** | 同一デバイス名で複数の Intune オブジェクトが存在するグループ一覧（削除候補強調） | Intune |
+| 10 | **重複デバイスオブジェクト** | 同一デバイス名で複数 DeviceId が存在するグループ一覧 | DeviceInfo |
 | 11 | **Defender バージョン** | MDAV / MDE ソフトウェアバージョン分布 | Defender TVM |
 
 ## ファイル構成
@@ -74,8 +71,7 @@ WeeklyIntuneStatusReport/
 └── README.md                                   # このファイル
 ```
 
-> **セクション 10「重複デバイスオブジェクト」および「プライマリユーザー不在デバイス (セクション 5-1)」は
-> GetIntuneDevices の取得結果からエージェントが集計するため、追加スキルは不要です。**
+> **デバイスインベントリ（総数/OS/重複/登録トレンド）はすべて KQL で集計するため、Intune プラグイン非依存です。**
 
 ## スキル構成
 
@@ -89,6 +85,9 @@ WeeklyIntuneStatusReport/
 
 | スキル名 | テーブル | フィルタ条件 | 説明 |
 |---|---|---|---|
+| `GetDeviceInventorySummary` | `DeviceInfo` | 直近7日 / DeviceId 単位最新 | 総数・OS/OS バージョン別台数を集計 |
+| `GetDuplicateDevices` | `DeviceInfo` | `ObjectCount > 1` | 同一デバイス名で複数 DeviceId の重複候補を集計 |
+| `GetDeviceEnrollmentTrend` | `DeviceInfo` | 初観測日近似 | 今週/先週/それ以前の新規デバイス数 |
 | `GetWindowsPatchLagDevices` | `DeviceTvmSoftwareVulnerabilities` | `PendingCveCount >= 10` | 未修正 CVE が 10 件以上の Windows デバイスを特定 |
 | `GetMDAVEngineVersions` | `DeviceTvmSoftwareInventory` | `SoftwareName == "windows_defender"` | MDAV バージョン分布を集計 |
 | `GetMDEClientVersions` | `DeviceTvmSoftwareInventory` | `SoftwareName == "defender_for_endpoint"` | MDE バージョン分布を集計 |
@@ -101,16 +100,13 @@ WeeklyIntuneStatusReport/
 > | distinct SoftwareName
 > ```
 
-### Intune プラグインスキル（組み込み）
+> **注意**: コンプライアンス（非準拠）は GetIntuneDevices を ComplianceState=Noncompliant で 1 回だけ呼び出し補完する。
 
-| スキル名 | 説明 |
-|---|---|
-| `GetIntuneDevices` | 全管理対象デバイス（OS・準拠状態・登録日時）を取得 |
-| `GetCompliancePolicies` | コンプライアンスポリシーと準拠状況サマリーを取得 |
-| `GetConfigurationProfiles` | 構成プロファイルと適用状況（成功/エラー/競合）を取得 |
-| `GetManagedApps` | 管理対象アプリのインストール状態サマリーを取得 |
+### Intune プラグインスキル（組み込み・ハイブリッド補完）
 
-> **注意**: 上記の Intune スキル名は一般的な名称です。実際の環境で利用可能なスキル名は Security Copilot の**プラグイン管理**画面で確認してください。
+| スキル名 | 呼び出し条件 | 説明 |
+|---|---|---|
+| `GetIntuneDevices` | `ComplianceState=Noncompliant`（User/Device 不指定）1 回のみ | 非準拠デバイスのみ少量取得。総数（Phase 1 KQL 集計）から近似準拠率を算出 |
 
 ### LogicApp スキル
 
@@ -122,8 +118,8 @@ WeeklyIntuneStatusReport/
 
 ### 1. Security Copilot
 
-- **Intune プラグイン**が有効化されていること
-- **Microsoft Defender for Endpoint** が接続されていること（TVM テーブルへのアクセスに必要）
+- **Microsoft Defender for Endpoint** が接続されていること（DeviceInfo / TVM テーブルへのアクセスに必要）
+- **Intune プラグイン**が有効化されていること（非準拠デバイス補完取得 GetIntuneDevices に必要）
 
 ### 2. Azure Logic App
 
@@ -210,8 +206,7 @@ Instructions 内の `All report text must be written in Japanese.` を変更
 | 各テーブル最大 10 行 | HTML 30KB 制限を遵守 |
 | HTML 全体 30KB 以下 | モデル出力トークン枠の制約 |
 | 失敗時はスキップ | エラーで全体が止まらないようにする |
-| 重複デバイス検出はクライアント側で算出 | GetIntuneDevices の結果から deviceName 重複をエージェントが集計 |
-| プライマリユーザー不在はクライアント側で算出 | userPrincipalName 空 かつ lastSyncDateTime 直近14日以内をエージェントが集計 |
+| 重複デバイス検出は KQL で集計 | DeviceInfo を DeviceName 重複で集計しトークンを抑制 |
 
 ## 関連ソリューション
 
@@ -228,6 +223,10 @@ Instructions 内の `All report text must be written in Japanese.` を変更
 |---|---|---|
 | **v1.0.0** | 2026-06-10 | 初版リリース（Intune 組み込みスキル + Defender TVM KQL + Logic App メール送信。11 セクション HTML レポート） |
 | **v1.1.0** | 2026-06-17 | `GetIntuneDevices` が単一デバイス詳細を返す不具合に対応。Phase 1 で User / Device パラメータを設定しないことを明示し、存在しない `Request` 入力を廃止。全件取得のため Platform 別（Windows / iOS / Android / macOS）の分割呼び出しに変更 |
+| **v1.2.0** | 2026-06-29 | 実在しない Intune スキル `GetCompliancePolicies` / `GetConfigurationProfiles` / `GetManagedApps` を削除（取得不可の原因）。コンプライアンス状態・重複・プライマリユーザー不在は `GetIntuneDevices` 集計に一本化。アプリ（セクション6）・ポリシー（セクション7）は組織横断スキル未提供のため「取得不可」明記に変更 |
+| **v1.3.0** | 2026-07-06 | 1万台規模でのトークン超過回避のため `GetIntuneDevices` 全件取得を廃止し、DeviceInfo を KQL 集計する方式に移行。KQL スキル `GetDeviceInventorySummary` / `GetDuplicateDevices` / `GetDeviceEnrollmentTrend` を追加。コンプライアンス/UPN/ポリシー/アプリは Defender AH データソース未提供のため取得不可明記。RequiredSkillsets から Intune を除外 |
+| **v1.4.0** | 2026-07-13 | ハイブリッド追加: `GetIntuneDevices` を ComplianceState=Noncompliant で 1 回だけ呼び出し、非準拠デバイスを少量補完。近似準拠率=(総数−非準拠)/総数。セクション 5/8 とサマリーカードにコンプライアンスを復活。RequiredSkillsets に Intune を再追加（プライマリユーザー不在は取得不可のまま） |
+| **v1.5.0** | 2026-07-20 | 取得不可表示となるセクションをレポートから削除: プライマリユーザー不在（5-1）・管理アプリサマリー（6）・Intune ポリシー状況（7）を廃止 |
 
 ## ライセンス
 

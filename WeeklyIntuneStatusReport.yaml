@@ -2,11 +2,10 @@ Descriptor:
   Name: WeeklyIntuneStatusReport
   DisplayName: Weekly Intune Status Report
   Description: >-
-    Microsoft Intune のデバイス管理データを週次で収集・分析し、デバイス登録数の増減（先週比）、
-    OS 別アセット一覧、エラー・非準拠デバイスの検出、管理対象アプリサマリー、
-    Intune ポリシーおよびコンプライアンス状況、Windows パッチ遅延分析、
+    Defender Advanced Hunting の DeviceInfo / TVM テーブルを KQL で集計し、
+    デバイス総数・OS 別アセット内訳・登録トレンド・重複デバイス検出・Windows パッチ遅延分析・
     Defender ウイルス対策（MDAV）エンジンバージョンおよび MDE センサークライアントバージョンの
-    分布状況を HTML/CSS メールレポートとして生成する週次エージェントです。
+    分布状況を HTML/CSS メールレポートとして生成する週次エージェントです。全件取得せずクエリ集計するため大規模環境でも安定動作します。
   Settings:
     - Name: LogicAppSubscriptionId
       Label: Logic App Subscription ID
@@ -31,11 +30,10 @@ AgentDefinitions:
   - Name: WeeklyIntuneStatusReportAgent
     DisplayName: Weekly Intune Status Report Agent
     Description: >-
-      Microsoft Intune のデバイス管理データを週次で収集・分析し、デバイス登録トレンド、
-      OS 別アセット一覧、エラー・非準拠デバイスの検出、管理対象アプリサマリー、
-      Intune ポリシーおよびコンプライアンス状況、Windows パッチ遅延分析、
+      Defender Advanced Hunting の DeviceInfo / TVM テーブルを KQL で集計し、デバイス登録トレンド、
+      OS 別アセット内訳、重複デバイス検出、Windows パッチ遅延分析、
       Defender MDAV/MDE エンジンバージョン分布を含む HTML/CSS レポートを生成し、
-      メールで送信するエージェントです。
+      メールで送信するエージェントです。全件取得せずクエリ集計するため大規模環境でも安定動作します。
     Publisher: Custom
     Product: Security
     RequiredSkillsets:
@@ -88,57 +86,28 @@ SkillGroups:
 
             # Workflow
 
-            ## Phase 1: Intune デバイスインベントリ収集
-            1. **GetIntuneDevices** を呼び出し、すべての管理対象デバイスの一覧を取得する。
+            ## Phase 1: デバイスインベントリ集計（KQL ベース・全件取得しない）
+            1万台規模でもトークン超過しないよう、デバイス情報は全件取得せず KQL で集計する。
+            1. **GetDeviceInventorySummary** を呼び出し、OS プラットフォーム / OS バージョン別の
+               デバイス台数と総数を取得する（DeviceInfo を集計）。入力パラメータは不要。
+            2. **GetDuplicateDevices** を呼び出し、同一デバイス名で複数 DeviceId を持つ
+               重複候補と重複グループ数を取得する。入力パラメータは不要。
+            3. **GetDeviceEnrollmentTrend** を呼び出し、今週/先週/それ以前の新規デバイス数
+               （DeviceInfo の初観測日近似）を取得し、登録トレンドを算出する。入力パラメータは不要。
 
-               **パラメータの渡し方（最重要・必須）**:
-               - GetIntuneDevices は「**User も Device も指定しない場合に限り、全デバイスの一覧**を返す」スキルである。
-                 Device パラメータ（デバイス名／デバイス ID）を渡すと、**そのデバイス1台の詳細のみ**を返し、
-                 週次レポートに必要な全デバイス集計ができなくなる。
-               - したがって **User パラメータと Device パラメータは絶対に設定しない（空のままにする）**。
-                 特定のデバイス名・デバイス ID・ユーザー名・UPN を推測して渡してはならない。
-               - このスキルに "Request" という入力は存在しない。自由文ではなく、下記の正式パラメータのみを使用する
-                 （User / Device / Platform / StartEnrollmentDate / EndEnrollmentDate /
-                 StartLastCheckinDate / EndLastCheckinDate / ComplianceState）。
-               - 全件を確実に取得するため、**Platform パラメータに "Windows" / "iOS" / "Android" / "macOS" を
-                 順に指定して 4 回に分けて呼び出す**（いずれの呼び出しでも Device / User は空のままにする）。
-                 各回の結果を結合して全デバイス一覧として扱う。スキル呼び出しは必ず1回ずつ順番に行うこと。
+               **データソースの制約（重要）**:
+               - コンプライアンス準拠率・非準拠デバイスは Defender Advanced Hunting に該当データが無いため
+                 KQL では算出できない。コンプライアンス情報は Phase 2 の
+                 GetIntuneDevices（非準拠のみ少量取得）で補完する。
 
-               取得したデータから以下を算出する:
-               - 今週（直近7日以内に enrollmentDateTime がある）登録されたデバイス数
-               - 先週（8〜14日前に enrollmentDateTime がある）登録されたデバイス数
-               - OS プラットフォーム別（Windows / iOS / Android / macOS）デバイス数
-               - Windows の場合） OS バージョン別デバイス数
-               - 重複デバイス検出: deviceName が同一のオブジェクトが2つ以上存在するグループを特定する。
-                 同じデバイス名のグループを1件とカウントし、重複デバイスグループ総数を算出する。
-                 各グループ内で最も enrollmentDateTime が新しいオブジェクトの登録日を基準に、
-                 上位5件のグループを抽出する（デバイス名、オブジェクト数、
-                 最新オブジェクトの enrollmentDateTime・lastSyncDateTime・complianceState、
-                 最古オブジェクトの enrollmentDateTime・lastSyncDateTime・complianceState）。
-               - プライマリユーザー不在デバイス検出: userPrincipalName が空/未設定で、かつ lastSyncDateTime が直近14日以内のデバイスを特定し、
-                 プライマリユーザーなしデバイス数（件数）を算出する。
-                 上位10件のデバイスを抽出する（lastSyncDateTime が古い順）。
-                 lastSyncDateTime が空のデバイスは「現在も使われている」判定ができないため本分析から除外する。
-                 併せて、該当デバイスの deviceName / operatingSystem / complianceState /
-                 enrollmentDateTime / lastSyncDateTime / model を保持する。
-
-            ## Phase 2: コンプライアンスポリシー収集
-            2. **GetCompliancePolicies** を呼び出し、すべてのコンプライアンスポリシーを取得する。
-               Request パラメータ:
-               "Get all compliance policies with their names, assigned group counts,
-               and compliance state summary (Compliant, NonCompliant, Error, Unknown)."
-
-            ## Phase 3: 構成プロファイル収集
-            3. **GetConfigurationProfiles** を呼び出し、すべての Intune 構成プロファイルを取得する。
-               Request パラメータ:
-               "Get all configuration profiles with their names, assignment status,
-               success count, error count, and conflict count."
-
-            ## Phase 4: 管理対象アプリ収集
-            4. **GetManagedApps** を呼び出し、管理対象アプリケーションの一覧を取得する。
-               Request パラメータ:
-               "Get all managed apps with their names, install status counts
-               (installed, failed, pending, not applicable), and platform."
+            ## Phase 2: 非準拠デバイス補完取得（GetIntuneDevices・非準拠のみ1回）
+            4. **GetIntuneDevices** を **1回だけ** 呼び出し、非準拠デバイスのみを取得する。
+               - **ComplianceState パラメータに "Noncompliant" のみを指定する。**
+               - **User / Device パラメータは絶対に設定しない（空のまま）。** 全件取得や単一デバイス取得を避ける。
+               - 非準拠デバイスは通常少数のためトークン超過しない。これにより準拠率は
+                 「(総数 − 非準拠数) / 総数 × 100」で近似算出できる（総数は Phase 1 の集計値）。
+               - 取得結果から非準拠デバイス数と上位デバイス（デバイス名 / OS / 最終チェックイン）を保持する。
+               - 失敗した場合はコンプライアンスセクションを「取得不可」と明記し、推測値は出さない。
 
             ## Phase 5: Windows パッチ遅延デバイス分析
             5. **GetWindowsPatchLagDevices** を呼び出し、未修正の OS レベル CVE が
@@ -173,7 +142,7 @@ SkillGroups:
             ### HTML レポート構造
 
             **表示ルール（重要）**:
-            - 下記のセクション（1〜11）およびサブセクションは、データの有無に関わらず必ず表示すること（省略しない）。
+            - 下記のセクション（1・2・3・4・5・8・9・10・11）およびサブセクションは、データの有無に関わらず必ず表示すること（省略しない）。
             - 該当データが 0 件の場合は、件数を「該当0件」と明記し、テーブル部には「該当なし」と表示する（エラーのような表現は避ける）。
             - スキル呼び出しが成功し、結果が空（0件）だった場合は「取得不可」ではなく「該当0件」として扱う。
             - スキル呼び出し失敗・権限不足・データ未取得などで根拠データが取得できない場合も、当該セクションは表示し、
@@ -188,24 +157,20 @@ SkillGroups:
 
             #### セクション 1: サマリーカード（4列テーブル）
             - <table> の4列レイアウトで各カードを表現（テーブルセルを使ったカード形式）
-            - 4列テーブルを2段で使用し、上段4カード + 下段3カード（残り1セルは空欄）で表示する
+            - 4列テーブルを2段で使用し、上段4カード + 下段（残りセルは空欄）で表示する
             - **サマリーカードでは「取得不可」という表示は使用しない。** 算出できない場合でも「該当0件」として数値（0）を表示する。
-            - 登録デバイス総数 + 先週比変化（▲増加 / ▼減少 / → 変化なし、件数と %）
-            - コンプライアンス準拠率（Compliant / 総数 × 100）+ 先週比変化
-              (正常: style="background-color:#107C10; color:#ffffff;")
-            - エラー / 非準拠デバイス数 + 先週比変化
-              (危険: style="background-color:#D13438; color:#ffffff;")
+            - 登録デバイス総数（GetDeviceInventorySummary の DeviceCount 合計）
+            - 今週の新規デバイス数（GetDeviceEnrollmentTrend の ThisWeek）+ 先週比（LastWeek）
+            - 非準拠デバイス数（GetIntuneDevices の非準拠件数）+ 近似準拠率
+              ((総数 − 非準拠数) / 総数 × 100)
             - パッチ遅延デバイス数（未修正 OS CVE が 10 件以上のデバイス数）
-            - 重複デバイス数（同一デバイス名の重複グループ数）
-            - インストール失敗が発生しているアプリ数（failed 件数が 1 以上のアプリ数）
-            - プライマリユーザーなしデバイス数（userPrincipalName が空/未設定 かつ lastSyncDateTime が直近14日以内）
-            - 下段の4列目は空欄セルとして表示してよい（例: border:none; background-color:transparent; padding:0;）
+            - 下段の空きセルは重複デバイス数カードとしてよい（GetDuplicateDevices の重複グループ数）。
 
             #### セクション 2: 全体傾向分析・推奨対策
-            収集したすべてのデータ（デバイスインベントリ、コンプライアンス状況、
-            ポリシー適用状況、アプリ配布状況、パッチ遅延、MDAV/MDE バージョン分布）を
+            収集したすべてのデータ（デバイスインベントリ集計、登録トレンド、重複デバイス、
+            コンプライアンス状況、パッチ遅延、MDAV/MDE バージョン分布）を
             総合的に分析し、以下の内容を事実に基づいて記載する。
-            推測・憶測は記載せず、取得データに存在する事実のみを根拠とすること。
+            推測・懶測は記載せず、取得データに存在する事実のみを根拠とすること。
 
             ##### 全体傾向サマリー
             - 過去7日間のデバイス管理全体の傾向を3〜5文で要約する。
@@ -218,9 +183,8 @@ SkillGroups:
             該当なしの場合は「該当なし」と明記する。
 
             **【要注意】コンプライアンス非準拠・エラーデバイス**
-            - 非準拠またはエラー状態のデバイスが存在する場合、
-              その台数と主要なデバイス名を記載
-            - 特にエラー状態が継続しているデバイスを強調
+            - GetIntuneDevices（Noncompliant）で取得した非準拠デバイスの台数と主要なデバイス名を記載
+            - 取得失敗時は「取得不可」と記載し推測しない
 
             **【要注意】パッチ遅延デバイス（未修正 CVE）**
             - 未修正 CVE が多いデバイスの台数とワースト上位のデバイス名・CVE 数を記載
@@ -231,108 +195,43 @@ SkillGroups:
             - 古いバージョンが残っているデバイスのバージョンとデバイス数を記載
             - 適用率が 90% 未満の場合は注意喚起
 
-            **【要注意】ポリシー適用エラー**
-            - 構成プロファイルまたはコンプライアンスポリシーでエラーが発生している場合、
-              ポリシー名とエラー件数を記載
-
-            **【要注意】アプリ配布失敗**
-            - インストール失敗率が高いアプリがある場合、アプリ名と失敗件数を記載
-
             **【要注意】重複デバイスオブジェクト**
-            - 同一デバイス名で複数の Intune オブジェクトが存在するグループ数を記載
+            - 同一デバイス名で複数の DeviceId が存在するグループ数を記載
             - 重複が多い場合（10件以上）は棚卸しを推奨
-            - 古いオブジェクトが非準拠・エラー状態の場合、
-              コンプライアンス準拠率を実態より低く見せている可能性を指摘
-
-            **【要注意】プライマリユーザー不在デバイス**
-            - userPrincipalName が空/未設定のデバイス数を記載
-            - 直近14日以内にチェックインしているにもかかわらず userPrincipalName が未設定のデバイスがある場合、
-              管理対象の妥当性（共有端末運用、ユーザー割り当て漏れ等）を確認するよう注意喚起
 
             ##### 推奨対策一覧
             上記の分析結果に基づき、優先度順（High → Medium → Low）で
             以下の形式のテーブルにまとめる。
             - 優先度 / 対策カテゴリ / 対象 / 推奨アクション
             - 対策カテゴリは以下から選択:
-              「即時対応」「パッチ管理」「Defender 更新」「ポリシー修正」
-              「アプリ配布」「監視継続」
+              「即時対応」「パッチ管理」「Defender 更新」「監視継続」
             - 各行に具体的なアクション（例: 「デバイスXXのコンプライアンス状態を確認し、
               ポリシーの再適用またはデバイスの再登録を実施」）を記載
 
             #### セクション 3: OS別デバイスアセット一覧（テーブル形式）
-            - OS / デバイス数 / 割合 / 先週比 の4列テーブル
-            - Windows の場合は OS バージョン（Windows 10 / 11 等）別の内訳をサブ行として表示
-            - 各 OS の今週 vs 先週比較（▲▼アイコン付き）
+            - GetDeviceInventorySummary の集計結果を用いる
+            - OS / デバイス数 / 割合 の3列テーブル
+            - Windows の場合は OS バージョン別の内訳をサブ行として表示
             - 割合はテーブルセル内に背景色帯で視覚化
               例: style="background-color:#0078D4; color:#fff; width:XX%;" の <td> を配置
 
             #### セクション 4: デバイス登録状況（週次増減トレンド）
-            - 今週の新規登録デバイス数と先週の比較
-            - 増加/減少を示す大きなアイコンとパーセンテージ
-            - 今週登録されたデバイスの上位リスト（デバイス名、OS、登録日時）
-            - "NEW" バッジ付きで新規デバイスを強調
+            - GetDeviceEnrollmentTrend の ThisWeek / LastWeek / Older を用いる（初観測日近似）
+            - 今週の新規デバイス数と先週の比較
+            - 増加/減少を示すアイコンとパーセンテージ
+            - 個別デバイス名一覧は KQL 集計のみのため省略してよい
 
             #### セクション 5: エラー・非準拠デバイスの詳細
-            - コンプライアンス状態別サマリー（Compliant / NonCompliant / Error /
-              Unknown / InGracePeriod）の件数表
-            - エラーまたは非準拠状態のデバイス一覧
-            - 列: デバイス名、OS プラットフォーム、コンプライアンス状態（色付きバッジ）、
-              最終チェックイン日時
-            - 7日以上継続して非準拠のデバイスを赤でハイライト
-            - 非準拠の主要因別集計（利用可能な場合）
-
-            ##### 5-1: プライマリユーザー不在デバイス（テーブル形式）
-            - userPrincipalName が空/未設定で、かつ lastSyncDateTime が直近14日以内のデバイスを「要確認」として一覧化する
-            - プライマリユーザーなしデバイス総数を表示
-            - 上位10件を以下の列で表示（lastSyncDateTime が古い順）:
-              - デバイス名 / OS / コンプライアンス状態 / 登録日時 / 最終チェックイン日時 / モデル
-            - lastSyncDateTime が空のデバイスは本セクションから除外する
-            - 該当デバイスが 0 件の場合も、セクション自体は省略せず「該当0件」と明記し、テーブル部には「該当なし」と表示する
-            - テーブル下部に「プライマリユーザーが削除済み/不明/共有端末などの可能性があるため、対象端末の管理方針を確認してください」という注記を記載
-
-            #### セクション 6: 管理対象アプリケーションサマリー（テーブル形式）
-            - 管理対象アプリの総数
-            - インストール済み / 失敗 / 保留中 / 対象外 の状態別件数を4列テーブルで表示
-            - 上位アプリの一覧（インストール数が多い順）:
-              - アプリ名、プラットフォーム、インストール済み件数、失敗件数
-            - インストール失敗率が高いアプリの行を
-              style="background-color:#FFF4CE;" でハイライト
-            - アプリ別インストール成功率をテーブルセル幅の背景色帯で表現
-            - 該当アプリが 0 件の場合も、セクション自体は省略せず「該当0件」と明記し、テーブル部には「該当なし」と表示する
-            - GetManagedApps が取得できない場合も、セクション自体は省略せず「取得不可」と理由を明記する
-
-            ##### 6-1: インストール失敗が多いアプリ Top 5（テーブル形式）
-            - 失敗件数（failed）が多い順に上位5件を別テーブルで表示
-            - 列: アプリ名 / プラットフォーム / インストール済み件数 / 失敗件数 / 失敗率（%）
-            - 失敗率 = 失敗件数 / (インストール済み件数 + 失敗件数) × 100
-            - 失敗率が 20% 以上の行を style="background-color:#FFF4CE;" でハイライト
-            - 失敗率が 50% 以上の行を style="background-color:#FDECEA;" でハイライト
-            - 失敗件数が 0 のアプリのみの場合は「インストール失敗が発生しているアプリはありません」と表示
-            - 該当アプリが 0 件の場合も、サブセクション自体は省略せず「該当0件」と明記し、テーブル部には「該当なし」と表示する
-
-            #### セクション 7: Intune ポリシー状況
-            ##### 7-1: 構成プロファイル（テーブル形式）
-            - プロファイル名、割り当て済みデバイス数、成功 / エラー / 競合 件数
-            - エラー件数が多いプロファイルの行を
-              style="background-color:#FFF4CE;" でハイライト
-            - 成功率をテーブルセル幅の背景色帯で表現
-
-            ##### 7-2: コンプライアンスポリシー（テーブル形式）
-            - ポリシー名、割り当てグループ数、準拠 / 非準拠 / エラー件数
-            - 非準拠またはエラーが多いポリシーの行を
-              style="background-color:#FFF4CE;" でハイライト
-            - ポリシー別準拠率をテーブルセル幅の背景色帯で表現
+            - GetIntuneDevices（ComplianceState=Noncompliant）で取得した非準拠デバイス一覧を表示する。
+            - 列: デバイス名 / OS / コンプライアンス状態（色付きバッジ）/ 最終チェックイン日時
+            - 上位10件まで表示。非準拠が 0 件の場合は「該当０件」、取得失敗時は「取得不可」と明記。
 
             #### セクション 8: コンプライアンスステータス（全体・テーブル形式）
-            - 状態 / デバイス数 / 割合 の3列テーブル
-            - 各状態をインラインスタイルで行背景色を設定:
-              - Compliant: style="background-color:#107C10; color:#fff;"
-              - NonCompliant: style="background-color:#D13438; color:#fff;"
-              - Unknown: style="background-color:#605E5C; color:#fff;"
-              - Error: style="background-color:#FF8C00; color:#fff;"
-              - InGracePeriod: style="background-color:#FFAE00; color:#000;"
-            - 各状態の件数と全体に対する割合（%）
-            - 先週との比較コメント（準拠率が上昇・下降・横ばい）
+            - 近似準拠率を表示：(総数 − 非準拠数) / 総数 × 100。総数は Phase 1 集計値、
+              非準拠数は GetIntuneDevices（Noncompliant）件数を使用。
+            - Compliant / NonCompliant の 2 状態をテーブル表示（状態 / デバイス数 / 割合）。
+              Compliant: style="background-color:#107C10; color:#fff;" / NonCompliant: style="background-color:#D13438; color:#fff;"
+            - Error/Unknown/InGracePeriod は取得していないため表示しない。GetIntuneDevices が失敗した場合は「取得不可」と明記し推測値は出さない。
 
             #### セクション 9: Windows パッチ遅延デバイス
             - 未修正 OS CVE が 10 件以上の Windows デバイス一覧（TVM データ）
@@ -345,19 +244,13 @@ SkillGroups:
             - 上位 5 台の最もリスクが高いデバイスを強調カードで表示
 
             #### セクション 10: 重複デバイスオブジェクト
-            - 同一デバイス名（deviceName）で複数の Intune オブジェクトが存在するケースを表示する。
-              デバイスの再登録などにより古いオブジェクトが残っている可能性がある。
+            - GetDuplicateDevices の集計結果（同一デバイス名で複数 DeviceId が存在する候補）を表示する。
+              デバイスの再登録などにより重複オブジェクトが残っている可能性がある。
             - 重複デバイスグループ総数（同じデバイス名の組を1件とカウント）を表示
-            - 最新オブジェクトの登録日（enrollmentDateTime）が新しい順に上位5件を
-              以下の列を持つテーブルで表示:
-              - デバイス名
-              - オブジェクト数（同一名のオブジェクト数）
-              - 最新オブジェクト: 登録日時 / 最終チェックイン日時 / コンプライアンス状態
-              - 最古オブジェクト: 登録日時 / 最終チェックイン日時 / コンプライアンス状態
+            - オブジェクト数が多い順に上位5件を、デバイス名 / オブジェクト数（ObjectCount）の
+              2列テーブルで表示する
             - 重複デバイスグループが 0 件の場合も、セクション自体は省略せず「該当0件」と明記し、テーブル部には「該当なし」と表示する
-            - 最古オブジェクトの最終チェックイン日時が30日以上前の場合、
-              その行を style="background-color:#FFF4CE;" でハイライトし、削除候補として強調
-            - テーブル下部に「古いオブジェクトは Intune 管理センターからの削除を検討してください」
+            - テーブル下部に「重複オブジェクトは Intune 管理センターで実態を確認し削除を検討してください」
               という注記を記載
 
             #### セクション 11: Defender エンジンバージョン状況
@@ -406,16 +299,16 @@ SkillGroups:
             # Final Output
             メール送信完了のステータスメッセージを日本語で返す。
             送信したレポートの概要を含めること:
-            - 総デバイス数と先週比変化
-            - コンプライアンス準拠率
-            - エラー/非準拠デバイス数
+            - 総デバイス数
+            - 今週の新規デバイス数と先週比
+            - 近似準拠率と非準拠デバイス数
             - パッチ遅延デバイス数
             「次のステップ」や「これからメール送信します」のような途中経過では終了しないこと。
         ChildSkills:
+          - GetDeviceInventorySummary
+          - GetDuplicateDevices
+          - GetDeviceEnrollmentTrend
           - GetIntuneDevices
-          - GetCompliancePolicies
-          - GetConfigurationProfiles
-          - GetManagedApps
           - GetWindowsPatchLagDevices
           - GetMDAVEngineVersions
           - GetMDEClientVersions
@@ -426,6 +319,52 @@ SkillGroups:
   # ─────────────────────────────────────────────────
   - Format: KQL
     Skills:
+      - Name: GetDeviceInventorySummary
+        DisplayName: Get Device Inventory Summary by OS
+        Description: >-
+          DeviceInfo テーブルを用いて、全管理対象デバイスの総数と OS プラットフォーム/
+          OS バージョン別台数を集計します。全件を取得せずクエリ側で集計するため、
+          1万台規模でもトークン超過しません。
+        Settings:
+          Target: Defender
+          Template: |-
+            DeviceInfo
+            | where Timestamp > ago(7d)
+            | summarize arg_max(Timestamp, OSPlatform, OSVersion) by DeviceId
+            | summarize DeviceCount = count() by OSPlatform, OSVersion
+            | sort by DeviceCount desc
+            | take 100
+
+      - Name: GetDuplicateDevices
+        DisplayName: Get Duplicate Device Names
+        Description: >-
+          DeviceInfo テーブルを用いて、同一デバイス名で複数の DeviceId が存在する
+          重複候補を集計します（再登録などで重複オブジェクトが残っている可能性）。
+        Settings:
+          Target: Defender
+          Template: |-
+            DeviceInfo
+            | where Timestamp > ago(7d)
+            | summarize arg_max(Timestamp, DeviceName) by DeviceId
+            | summarize ObjectCount = dcount(DeviceId) by DeviceName
+            | where ObjectCount > 1
+            | sort by ObjectCount desc
+            | take 20
+
+      - Name: GetDeviceEnrollmentTrend
+        DisplayName: Get Device Enrollment Trend
+        Description: >-
+          DeviceInfo テーブルの最初の観測日を近似登録日として、今週/先週/それ以前に
+          新規に現れたデバイス数を集計し、登録トレンドを算出します。
+        Settings:
+          Target: Defender
+          Template: |-
+            DeviceInfo
+            | where Timestamp > ago(60d)
+            | summarize FirstSeen = min(Timestamp) by DeviceId
+            | extend Bucket = case(FirstSeen > ago(7d), "ThisWeek", FirstSeen > ago(14d), "LastWeek", "Older")
+            | summarize DeviceCount = count() by Bucket
+
       - Name: GetWindowsPatchLagDevices
         DisplayName: Get Windows Devices with Pending OS Vulnerabilities
         Description: >-
